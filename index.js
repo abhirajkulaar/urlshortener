@@ -12,21 +12,25 @@ const saltRounds = 10;
 const app = express();
 var MongoClient = require('mongodb').MongoClient;
 const dotenv = require('dotenv');
+const aws = require('aws-sdk');
+const { runInNewContext } = require('vm');
 dotenv.config();
+const {ObjectId} = require('mongodb')
+
+var url = "mongodb+srv://ask:ask@cluster0.8ugoa.mongodb.net/invoiceGenerator?retryWrites=true&w=majority"
+const jwtKey="testkey"
 
 
-var url = process.env.url
-const jwtKey=process.env.jwtKey
-const gmailPass= process.env.gmailPass
 
 
-app
-app.use('/public', express.static('public'))
+
+
+app.use('/build', express.static('build'))
 .use(bodyParser.json())
-// app.use(cors({
-//   origin: true,
-//   credentials: true
-// }))
+app.use(cors({
+  origin: true,
+  credentials: true
+}))
 .use(cookieParser())
 .use(function(req, res, next) {
     res.header("Access-Control-Allow-Origin", "*"); // update to match the domain you will make the request from
@@ -36,66 +40,7 @@ app.use('/public', express.static('public'))
 
 
 
-.post('/register', (req,res)=>
-{
 
-  if(typeof req.body.usermail !="string"||typeof req.body.firstName !="string"||typeof req.body.lastName !="string"||typeof req.body.password !="string")
-    {res.status(400).json({status:"fail",reason:"request body invalid"});return;}
-
-
-
-    MongoClient.connect(url, function(err, db) {
-        if (err) {res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-        var dbo = db.db("urlShortener");
-        dbo.collection("loginData").find({usermail:req.body.usermail}).toArray(
-            (err,result)=>{
-                if(err){db.close();res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-                if(result.length!=0){{db.close();res.status(400).json({status:"fail",reason:"E-Mail already registered pls login"});return;}}
-
-                bcrypt.hash(req.body.password, saltRounds, function(err, hash) {
-                  if(err){db.close();res.status(400).json({status:"fail",reason:"Unable to encrypt password"});return;}
-
-                    dbo.collection("loginData").insertOne({usermail:req.body.usermail,password:hash,firstName:req.body.firstName,lastName:req.body.lastName,active:false}, (err,result)=>{
-
-                      console.log("inserted")
-                      {if(err){db.close();res.status(400).json({status:"fail",reason:"Unable to register data with DB"});return;}}
-                      db.close();
-                      jwt.sign({ usermail: req.body.usermail}, jwtKey,async function(err, token) {
-                        if(err){res.status(400).json({status:"fail",reason:"Unable to generate jwt token"});throw err;return;}
-                        console.log(token);
-                        let transporter = nodemailer.createTransport({
-                          service: "gmail",
-                          auth: {
-                            user: "abhirajkulaar@gmail.com", // generated ethereal user
-                            pass: gmailPass, // generated ethereal password
-                          },
-                        });
-              
-                        let info = await transporter.sendMail({
-                          from: 'abhirajkulaar@gmail.com', // sender address
-                          to: req.body.usermail, // list of receivers
-                          subject: "URL Shortener - Activation link", // Subject line
-                          text: "Pls Click here to active your account : "+req.headers.host+"/verifyMail/"+ token, // plain text body
-                         // html: "<b>Hello world?</b>", // html body
-                        });
-  
-                        res.json({status:"success"});return;
-                      })
-      
-                    })
-                   
-                });
-
-                
-            }
-        )
-       
-      
- 
-
-
-
-})})
 
 
 .post('/login',(req,res)=>
@@ -107,21 +52,23 @@ app.use('/public', express.static('public'))
 
     MongoClient.connect(url, function(err, db) {
       if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-        var dbo = db.db("urlShortener");
+        var dbo = db.db("rajasthan");
         dbo.collection("loginData").find({usermail:req.body.usermail}).toArray(
             (err,result)=>{
                 if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+                db.close();
                 if(result.length==0){{res.status(400).json({status:"fail",reason:"User does not exist pls register"});return;}}
                 if(!result[0].active){{res.status(400).json({status:"fail",reason:"Please confirm your e-mail from inbox!"});return;}}
-                bcrypt.compare(req.body.password, result[0].password, function(err, result) {
+                bcrypt.compare(req.body.password, result[0].password, function(err, resultEnc) {
                     // Store hash in your password DB.
                     if(err){res.status(400).json({status:"fail",reason:"Unable to verify password!"});return;}
-                    if(!result){res.status(400).json({status:"fail",reason:"Incorrect Password!"});return;}
+                    if(req.body.password!= result[0].password){res.status(400).json({status:"fail",reason:"Incorrect Password!"});return;}
 
-                    jwt.sign({ usermail: req.body.usermail}, jwtKey, function(err, token) {
+                    jwt.sign({ usermail: req.body.usermail,userType:result[0].userType}, jwtKey, function(err, token) {
                         if(err){res.status(400).json({status:"fail",reason:"Unable to generate jwt token"});throw err;return;}
                         console.log(token);
-                        res.cookie('jwt',token, { httpOnly: true, secure: true, maxAge: 136000,sameSite: "Lax" }).json({status:"success"});return;
+                        res.cookie('jwt',token, { httpOnly: false, secure: false, maxAge: 136000,sameSite: "Lax" }).json({status:"success",userType:result[0].userType});
+                        return;
                       });
 
 
@@ -142,33 +89,7 @@ app.use('/public', express.static('public'))
 
 
 })
-.get('/verifyMail/:token',async (req,res)=>{
 
-
-  
-  jwt.verify(req.params.token, jwtKey, function(err, decoded) {
-    if(err||!decoded){res.status(400).json({status:"fail",reason:"invalid token"});return}
-    else{
-    
-    req.usermail=decoded.usermail;
-    MongoClient.connect(url, function(err, db) {
-      if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-        var dbo = db.db("urlShortener");
-        console.log(decoded.usermail)
-        dbo.collection("loginData").updateOne({usermail:decoded.usermail},{$set:{active:true}},(err,result)=>{
-
-          if(err){res.status(400).json({status:"fail",reason:"Unable to set status in DB"});return}
-
-          res.cookie('jwt',req.params.token, { httpOnly: true, secure: true, maxAge: 136000,sameSite: "Lax" }).redirect("/landing")
-        })
-
-
-
-    })
-  }
-
-
-})})
 
 
 
@@ -188,6 +109,8 @@ app.use('/public', express.static('public'))
     else{
     console.log(decoded)
     req.usermail=decoded.usermail;
+    req.userType=decoded.userType;
+    if(!req.usermail){{res.status(400).json({status:"fail",reason:"Unautorized!"});return;}}
     next();}
   })
 
@@ -199,11 +122,13 @@ app.use('/public', express.static('public'))
 
   MongoClient.connect(url, function(err, db) {
     if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-      var dbo = db.db("urlShortener");
+      var dbo = db.db("rajasthan");
       dbo.collection("urlData").find({usermail:req.usermail}).toArray(
           (err,result)=>{
+            db.close();
               if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
               //if(result.length==0){{res.status(400).json({status:"fail",reason:"User does not exist pls register"});return;}}
+             
               res.json({usermail:req.usermail,data:result,domain:req.headers.host})
               return;
               
@@ -217,32 +142,93 @@ app.use('/public', express.static('public'))
 })
 
 
+.post("/createTicket",(req,res)=>{
+
+
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("tickets").insertOne({...req.body,status:"Pending"},(err,resp)=>{
+        db.close();
+        if(err){res.status(400).json({status:"error",reason:"Unable to insert into DB"});return;}
+        res.status(200).json("Successfully inserted")
+        return;
+      })
+  })
+
+
+})
+
+.get("/tickets",(req,res)=>{
+
+
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("tickets").find().toArray((err,resp)=>{
+        db.close();
+        if(err){res.status(400).json({status:"error",reason:"Unable to insert into DB"});return;}
+        res.status(200).json(resp)
+        return;
+      })
+  })
+
+
+})
+.post('/triggerPayment',(req,res)=>{
+
+
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("tickets").findOneAndUpdate({_id:ObjectId(req.body._id)},{$set:{status:"Performing Payment"}},(err,resp)=>{
+        db.close();
+        if(err){res.status(400).json({status:"error",reason:"Unable to insert into DB"});return;}
+        res.status(200).json(resp)
+        return;
+      })
+  })
+
+
+})
+
+.post('/removeTicket',(req,res)=>{
+
+
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("tickets").deleteOne({_id:ObjectId(req.body._id)},{$set:{status:"Performing Payment"}},(err,resp)=>{
+        db.close();
+        if(err){res.status(400).json({status:"error",reason:"Unable to insert into DB"});return;}
+        res.status(200).json(resp)
+        return;
+      })
+  })
+
+
+})
+
 .get("/login",(req,res)=>{
 
-  if(req.usermail){ res.redirect('/landing');return;}
+  if(req.usermail){ res.redirect('/adminlanding');return;}
 
-  res.sendFile(__dirname + '/public/index.html');
+  res.sendFile(__dirname + '/build/index.html');
   return;
 })
 
-.get("/register",(req,res)=>{
 
-  if(req.usermail){ res.redirect('/landing');return;}
-
-  res.sendFile(__dirname + '/public/register.html');
-  return;
-})
 
 .get("/",(req,res)=>{
 
-  if(req.usermail){ res.sendFile(__dirname + '/public/landing.html');;return;}
+  if(req.usermail){ res.sendFile(__dirname + '/build/index.html');;return;}
 
   res.redirect('/login')
   return;
 })
-.get("/landing",(req,res)=>{
+.get("/landingadmin",(req,res)=>{
 
-  if(req.usermail){ res.sendFile(__dirname + '/public/landing.html');;return;}
+  if(req.usermail){ res.sendFile(__dirname + '/build/index.html');;return;}
 
   res.redirect('/login');return;
 })
@@ -255,6 +241,136 @@ app.use('/public', express.static('public'))
 
 })
 
+.get("/stores",(req,res)=>{
+  let filter={}
+
+  if(req.userType=='manager'){filter={manager:req.body.usermail}}
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("stores").find().toArray(
+        (err,result)=>{
+        res.status(200).json(result);return;
+        })})
+})
+
+
+.get("/managerList",(req,res)=>{
+
+  if(req.userType!='admin'){res.status(400).json({status:"fail",reason:"Unautorized!"});return;}
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("loginData").find({userType:'manager'}).toArray(
+        (err,result)=>{
+        res.status(200).json(result);return;
+        })})
+})
+
+.get("/employeeList",(req,res)=>{
+
+  if(req.userType!='admin'){res.status(400).json({status:"fail",reason:"Unautorized!"});return;}
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("loginData").find({userType:'employee'}).toArray(
+        (err,result)=>{
+        res.status(200).json(result);return;
+        })})
+})
+
+
+.post('/store',(req,res)=>{
+  if(req.userType!='admin'){res.status(400).json({status:"fail",reason:"Unautorized!"});return;}
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("stores").insertOne({name:req.body.name,address:req.body.address,manager:null},
+        (err,result)=>{
+        res.status(200).json(result);return;
+        })})
+})
+
+.post('/assignManager',(req,res)=>{
+  if(req.userType!='admin'){
+    res.status(400).json({status:"fail",reason:"Unautorized!"});return;}
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+    var dbo = db.db("rajasthan");
+    dbo.collection("loginData").updateOne({usermail:req.body.manager,userType:"manager"},{$set:{store:req.body.store}},(err,resp)=>
+    {if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      if(res.length==0){res.status(400).json({status:"fail",reason:"Mentioned manager ID not found!"});return;}
+      
+      dbo.collection("stores").updateOne({name:req.body.store},{$set:{manager:req.body.manager}},
+        (err,result)=>{
+          if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+        res.status(200).json(result);return;
+    })
+
+        })})
+})
+
+
+
+.post('/assignEmployee',(req,res)=>{
+  if(req.userType!='admin'){
+    res.status(400).json({status:"fail",reason:"Unautorized!"});return;}
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+    var dbo = db.db("rajasthan");
+    dbo.collection("loginData").updateOne({usermail:req.body.employee,userType:"employee"},{$set:{store:req.body.store}},(err,resp)=>
+    {if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      if(res.length==0){res.status(400).json({status:"fail",reason:"Mentioned Employee ID not found!"});return;}
+      
+      dbo.collection("stores").updateOne({name:req.body.store},{$push:{employees:req.body.employee}},
+        (err,result)=>{
+          if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+        res.status(200).json(result);return;
+    })
+
+        })})
+})
+
+
+.post('/removeManager',(req,res)=>{
+  if(req.userType!='admin'){
+    res.status(400).json({status:"fail",reason:"Unautorized!"});return;}
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+    var dbo = db.db("rajasthan");
+    dbo.collection("loginData").updateOne({usermail:req.body.manager,userType:"manager"},{$set:{store:null}},(err,resp)=>
+    {if(err){res.status(400).json({status:"fail",reason:"Mentioned manager ID not found or Unable to connect to DB!"});return;}
+      if(res.length==0){res.status(400).json({status:"fail",reason:"Mentioned manager ID not found!"});return;}
+      
+      dbo.collection("stores").updateOne({name:req.body.store},{$set:{manager:null}},
+        (err,result)=>{
+          if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+        res.status(200).json(result);return;
+    })
+
+        })})
+})
+
+
+.post('/removeEmployee',(req,res)=>{
+  if(req.userType!='admin'){
+    res.status(400).json({status:"fail",reason:"Unautorized!"});return;}
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+    var dbo = db.db("rajasthan");
+    dbo.collection("loginData").updateOne({usermail:req.body.employee,userType:"employee"},{$set:{store:null}},(err,resp)=>
+    {if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      if(res.length==0){res.status(400).json({status:"fail",reason:"Mentioned Employee ID not found!"});return;}
+      
+      dbo.collection("stores").updateOne({name:req.body.store},{$pull:{employees:req.body.employee}},
+        (err,result)=>{
+          if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+        res.status(200).json(result);return;
+    })
+
+        })})
+})
+
 
 
 .post("/forgotPasswordRequest", (req,res)=>{
@@ -264,7 +380,7 @@ app.use('/public', express.static('public'))
 
     MongoClient.connect(url, function(err, db) {
       if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-        var dbo = db.db("urlShortener");
+        var dbo = db.db("rajasthan");
         dbo.collection("loginData").find({usermail:req.body.usermail}).toArray(async (err,result)=>{
           if(err){{res.status(400).json({status:"fail",reason:"Unable to query DB"});return;}}
           if(result.length==0){{res.status(400).json({status:"fail",reason:"User not found"});return;}}
@@ -311,7 +427,7 @@ app.use('/public', express.static('public'))
 
     MongoClient.connect(url, function(err, db) {
       if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-        var dbo = db.db("urlShortener");
+        var dbo = db.db("rajasthan");
         dbo.collection("loginData").find({usermail:req.body.usermail}).toArray(async (err,result)=>{
           if(err){{res.status(400).json({status:"fail",reason:"Unable to query DB"});return;}}
           if(result.length==0||!result[0].resetCode){{res.status(400).json({status:"fail",reason:"User not found/No reset code sent"});return;}}
@@ -347,7 +463,7 @@ app.use('/public', express.static('public'))
   {{res.status(400).json({status:"fail",reason:"ShortURL already taken up!"});return;}}
   MongoClient.connect(url, function(err, db) {
     if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-      var dbo = db.db("urlShortener");
+      var dbo = db.db("rajasthan");
       dbo.collection("loginData").find({usermail:req.usermail}).toArray( (err,result)=>{
 
         if(err){{res.status(400).json({status:"fail",reason:"Unable to query DB"});return;}}
@@ -386,6 +502,51 @@ return;
 
 })
 
+.get('/sign-s3', (req, res) => {
+  aws.config.region = 'us-east-2';
+  const s3 = new aws.S3({
+    accessKeyId: AWS_ACCESS_KEY_ID,
+    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+   
+});
+  const fileName = req.query['file-name'];
+  const fileType = req.query['file-type'];
+  const s3Params = {
+    Bucket: S3_BUCKET,
+    Key: fileName,
+    Expires: 60,
+    ContentType: fileType,
+    ACL: 'public-read'
+  };
+
+  s3.getSignedUrl('putObject', s3Params, (err, data) => {
+    if(err){
+      console.log(err);
+      return res.end();
+    }
+    const returnData = {
+      signedRequest: data,
+      url: `https://${S3_BUCKET}.s3.amazonaws.com/${fileName}`
+    };
+    res.write(JSON.stringify(returnData));
+    res.end();
+  });
+})
+.post('/fileUploadComplete',(req,res)=>{
+
+  MongoClient.connect(url, function(err, db) {
+    if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
+      var dbo = db.db("rajasthan");
+      dbo.collection("filesList").insertOne({usermail:req.usermail,fileName:req.body.fileName,downloads:0},(err,result)=>{
+        if(err){{res.status(400).json({status:"fail",reason:"Unable to update DB"});return;}}
+
+        
+res.json({status:"success"})
+
+  })
+
+})})
+
 .use((req,res)=>{
 
   
@@ -393,7 +554,7 @@ return;
 
   MongoClient.connect(url, function(err, db) {
     if(err){res.status(400).json({status:"fail",reason:"Unable to connect to DB"});return;}
-      var dbo = db.db("urlShortener");
+      var dbo = db.db("rajasthan");
       dbo.collection("urlData").find({shortURL:req.originalUrl.substr(1)}).toArray( (err,result)=>{
         if(err){{res.status(400).json({status:"fail",reason:"Unable to query DB"});return;}}
 
